@@ -4,14 +4,17 @@ import geopandas as gpd
 import sys
 from datacube.storage import masking
 from datacube.utils import geometry
+from datacube import Datacube
 from datacube.helpers import ga_pq_fuser
-
+from datacube.utils.geometry import assign_crs
+from odc.algo import xr_reproject
 from pyproj import Proj, transform
+sys.path.append('../dea-notebooks/Scripts')
+from dea_datahandling import load_ard
+from dea_classificationtools import HiddenPrints
+from dea_spatialtools import xr_rasterize
 
-
-
-
-def calculate_anomalies(shp_fpath, collection, year, season, query_box, dask_chunks):
+def calculate_anomalies(shp_fpath, resolution, year, season, query_box, dask_chunks):
 
     """
     This function will load three months worth of satellite 
@@ -27,8 +30,6 @@ def calculate_anomalies(shp_fpath, collection, year, season, query_box, dask_chu
     query_box; tuple
         A tuple of the form (lat,lon,buffer) to delineate an AOI if not
         providing a shapefile
-    collection`: string
-        The landsat collection to load data from. either 'c3' or 'c2'
     year : string
         The year of interest to e.g. '2018'. This will be combined with
         the 'season' to generate a time period to load data from.
@@ -75,14 +76,8 @@ def calculate_anomalies(shp_fpath, collection, year, season, query_box, dask_chu
         time = (year + "-" + str(months[0]), year + "-" + str(months[2]))
 
     # connect to datacube
-    try:
-        if collection == "c3":
-            dc = datacube.Datacube(app="calculate_anomalies", env="c3-samples")
-        if collection == "c2":
-            dc = datacube.Datacube(app="calculate_anomalies")
-    except:
-        raise ValueError("collection must be either 'c3' or 'c2'")
-
+    dc = Datacube(app="calculate_anomalies") #env="c3-samples"
+    
     # get data from shapefile extent and mask
     if shp_fpath is not None:
         # open shapefile with geopandas
@@ -104,66 +99,19 @@ def calculate_anomalies(shp_fpath, collection, year, season, query_box, dask_chu
 
         query = {"geopolygon": geom, "time": time}
 
-        if collection == "c3":
-
-            ds = load_ard(
-                dc=dc,
-                products=["ga_ls5t_ard_3", "ga_ls7e_ard_3", "ga_ls8c_ard_3"],
-                measurements=["nbart_nir", "nbart_red"],
-                ls7_slc_off=False,
-                # align = (15,15),
-                resolution=(-30, 30),
-                output_crs="epsg:3577",
-                dask_chunks=dask_chunks,
-                group_by="solar_day",
-                **query,
-            )
-
-        if collection == "c2":
-            print("loading Landsat C2")
-            ds = dc.load(
-                product="ls8_nbart_albers",
-                group_by="solar_day",
-                measurements=["nir", "red"],
-                resolution=(-30, 30),
-                output_crs="epsg:3577",
-                dask_chunks=dask_chunks,
-                **query,
-            )
-
-            # Load PQ data
-            print("loading Landsat C2 pq data")
-            pq = dc.load(
-                product="ls8_pq_albers",
-                group_by="solar_day",
-                fuse_func=ga_pq_fuser,
-                resolution=(-30, 30),
-                output_crs="epsg:3577",
-                dask_chunks=dask_chunks,
-                **query,
-            )
-
-            print("making pq mask")
-            good_quality = masking.make_mask(
-                pq.pixelquality,
-                cloud_acca="no_cloud",
-                cloud_shadow_acca="no_cloud_shadow",
-                cloud_shadow_fmask="no_cloud_shadow",
-                cloud_fmask="no_cloud",
-                blue_saturated=False,
-                green_saturated=False,
-                red_saturated=False,
-                nir_saturated=False,
-                swir1_saturated=False,
-                swir2_saturated=False,
-                contiguous=True,
-            )
-
-            attrs = ds.attrs
-            ds = ds.astype(np.float32)
-            ds = ds.where(good_quality)
-            ds = masking.mask_invalid_data(ds)
-            ds.attrs.update(attrs)
+        ds = load_ard(
+            dc=dc,
+            products=["ga_ls8c_ard_3"],
+            measurements=["nbart_nir", "nbart_red"],
+            ls7_slc_off=False,
+            # align = (15,15),
+            output_crs="epsg:3577",
+            resolution=resolution,
+            resampling= {"fmask": "nearest", "*": "bilinear"},
+            dask_chunks=dask_chunks,
+            group_by="solar_day",
+            **query,
+        )
 
         # create polygon mask
         with HiddenPrints():
@@ -179,65 +127,18 @@ def calculate_anomalies(shp_fpath, collection, year, season, query_box, dask_chu
             "time": time,
         }
 
-        if collection == "c3":
-
-            ds = load_ard(
-                dc=dc,
-                products=["ga_ls5t_ard_3", "ga_ls7e_ard_3", "ga_ls8c_ard_3"],
-                measurements=["nbart_nir", "nbart_red"],
-                ls7_slc_off=False,
-                # align = (15,15),
-                resolution=(-30, 30),
-                output_crs="epsg:3577",
-                dask_chunks=dask_chunks,
-                group_by="solar_day",
-                **query,
-            )
-
-        if collection == "c2":
-
-            print("loading Landsat collection 2")
-            ds = dc.load(
-                product="ls8_nbart_albers",
-                group_by="solar_day",
-                measurements=["nir", "red"],
-                resolution=(-30, 30),
-                output_crs="epsg:3577",
-                dask_chunks=dask_chunks,
-                **query,
-            )
-
-            # Load PQ data
-            pq = dc.load(
-                product="ls8_pq_albers",
-                group_by="solar_day",
-                fuse_func=ga_pq_fuser,
-                resolution=(-30, 30),
-                output_crs="epsg:3577",
-                dask_chunks=dask_chunks,
-                **query,
-            )
-
-            good_quality = masking.make_mask(
-                pq.pixelquality,
-                cloud_acca="no_cloud",
-                cloud_shadow_acca="no_cloud_shadow",
-                cloud_shadow_fmask="no_cloud_shadow",
-                cloud_fmask="no_cloud",
-                blue_saturated=False,
-                green_saturated=False,
-                red_saturated=False,
-                nir_saturated=False,
-                swir1_saturated=False,
-                swir2_saturated=False,
-                contiguous=True,
-            )
-
-            attrs = ds.attrs
-            ds = ds.astype(np.float32)
-            ds = ds.where(good_quality)
-            ds = masking.mask_invalid_data(ds)
-            ds.attrs.update(attrs)
+        ds = load_ard(
+            dc=dc,
+            products=["ga_ls5t_ard_3", "ga_ls7e_ard_3", "ga_ls8c_ard_3"],
+            measurements=["nbart_nir", "nbart_red"],
+            ls7_slc_off=False,
+            output_crs="epsg:3577",
+            resolution=resolution,
+            resampling= {"fmask": "nearest", "*": "bilinear"},
+            dask_chunks=dask_chunks,
+            group_by="solar_day",
+            **query,
+        )
 
     print(
         "start: "
@@ -248,11 +149,8 @@ def calculate_anomalies(shp_fpath, collection, year, season, query_box, dask_chu
         + str(len(ds.time.values))
     )
     print("calculating vegetation indice")
-    if collection == "c3":
-        vegIndex = (ds.nbart_nir - ds.nbart_red) / (ds.nbart_nir + ds.nbart_red)
-    if collection == "c2":
-        vegIndex = (ds.nir - ds.red) / (ds.nir + ds.red)
-
+    vegIndex = (ds.nbart_nir - ds.nbart_red) / (ds.nbart_nir + ds.nbart_red)
+        
     vegIndex = vegIndex.mean("time").rename("ndvi_mean")
 
     # get the bounding coords of the input ds to help with indexing the climatology
@@ -264,26 +162,32 @@ def calculate_anomalies(shp_fpath, collection, year, season, query_box, dask_chu
     # index the climatology dataset to the location of our AOI
     climatology_mean = (
         xr.open_rasterio(
-            "/g/data/r78/cb3058/dea-notebooks/vegetation_anomalies/results/NSW_NDVI_Climatologies_mean/mosaics/ndvi_clim_mean_"
+            "data/climatologies/mean/ndvi_clim_mean_"
             + season
-            + "_nsw.tif"
+            + "_gwydir.tif"
         )
         .sel(x=x_slice, y=y_slice, method="nearest")
         .chunk(chunks=dask_chunks)
         .squeeze()
     )
-
+    
+    climatology_mean = assign_crs(climatology_mean)
+    climatology_mean = xr_reproject(climatology_mean ,ds.geobox, "bilinear")
+    
     climatology_std = (
         xr.open_rasterio(
-            "/g/data1a/r78/cb3058/dea-notebooks/vegetation_anomalies/results/NSW_NDVI_Climatologies_std/mosaics/ndvi_clim_std_"
+            "data/climatologies/std/ndvi_clim_std_"
             + season
-            + "_nsw.tif"
+            + "_gwydir.tif"
         )
         .sel(x=x_slice, y=y_slice, method="nearest")
         .chunk(chunks=dask_chunks)
         .squeeze()
     )
-
+    
+    climatology_std = assign_crs(climatology_std)
+    climatology_std = xr_reproject(climatology_std ,ds.geobox, "bilinear")
+    
     # test if the arrays match before we calculate the anomalies
     np.testing.assert_allclose(
         vegIndex.x.values,
@@ -332,9 +236,4 @@ def calculate_anomalies(shp_fpath, collection, year, season, query_box, dask_chu
         dask="parallelized",
     )
 
-    # add back metadata
-    anomalies = anomalies.rename("std_anomalies").to_dataset()
-    anomalies.attrs = ds.attrs
-    anomalies.attrs["units"] = 1
-
-    return anomalies
+    return assign_crs(anomalies, crs=ds.geobox.crs)
