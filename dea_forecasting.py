@@ -1,3 +1,7 @@
+from dea_spatialtools import xr_rasterize
+from dea_classificationtools import HiddenPrints
+from dea_datahandling import load_ard
+from statsmodels.tsa.ar_model import AutoReg
 import numpy as np
 import xarray as xr
 import geopandas as gpd
@@ -9,20 +13,18 @@ from datacube.helpers import ga_pq_fuser
 from datacube.utils.geometry import assign_crs
 from odc.algo import xr_reproject
 from pyproj import Proj, transform
-sys.path.append('../dea-notebooks/Scripts')
-from dea_datahandling import load_ard
-from dea_classificationtools import HiddenPrints
-from dea_spatialtools import xr_rasterize
+
+sys.path.append("../dea-notebooks/Scripts")
+
 
 def calculate_anomalies(shp_fpath, resolution, year, season, query_box, dask_chunks):
-
     """
     This function will load three months worth of satellite 
     images using the specified season, calculate the seasonal NDVI mean
     of the input timeseries, then calculate a standardised seasonal
     NDVI anomaly by comparing the NDVI seasonal mean with
     pre-calculate NDVI climatology means and standard deviations.
-    
+
     Parameters
     ----------
     shp_fpath`: string 
@@ -37,12 +39,12 @@ def calculate_anomalies(shp_fpath, resolution, year, season, query_box, dask_chu
         The season of interest, e.g `DJF','JFM','FMA' etc
     dask_chunks : Dict 
         Dictionary of values to chunk the data using dask e.g. `{'x':3000, 'y':3000}`
-    
+
     Returns
     -------
     xarr : xarray.DataArray
         A data array showing the seasonl NDVI standardised anomalies.
-    
+
     """
 
     # dict of all seasons for indexing datacube
@@ -70,14 +72,14 @@ def calculate_anomalies(shp_fpath, resolution, year, season, query_box, dask_chu
     months = all_seasons.get(season)
 
     if (season == "DJF") or (season == "NDJ"):
-        time = (year + "-" + str(months[0]), str(int(year) + 1) + "-" + str(months[2]))
+        time = (year+"-"+str(months[0]), str(int(year)+1) +"-"+str(months[2]))
 
     else:
         time = (year + "-" + str(months[0]), year + "-" + str(months[2]))
 
     # connect to datacube
-    dc = Datacube(app="calculate_anomalies") #env="c3-samples"
-    
+    dc = Datacube(app="calculate_anomalies")  # env="c3-samples"
+
     # get data from shapefile extent and mask
     if shp_fpath is not None:
         # open shapefile with geopandas
@@ -101,13 +103,13 @@ def calculate_anomalies(shp_fpath, resolution, year, season, query_box, dask_chu
 
         ds = load_ard(
             dc=dc,
-            products=["ga_ls8c_ard_3"],
+            products=["ga_ls5t_ard_3", "ga_ls7e_ard_3", "ga_ls8c_ard_3"],
             measurements=["nbart_nir", "nbart_red"],
             ls7_slc_off=False,
             # align = (15,15),
             output_crs="epsg:3577",
             resolution=resolution,
-            resampling= {"fmask": "nearest", "*": "bilinear"},
+            resampling={"fmask": "nearest", "*": "bilinear"},
             dask_chunks=dask_chunks,
             group_by="solar_day",
             **query,
@@ -122,8 +124,8 @@ def calculate_anomalies(shp_fpath, resolution, year, season, query_box, dask_chu
     else:
         print("Extracting data based on lat, lon coords")
         query = {
-            "lon": (query_box[1] - query_box[2], query_box[1] + query_box[2]),
-            "lat": (query_box[0] - query_box[2], query_box[0] + query_box[2]),
+            "x": (query_box[1] - query_box[2], query_box[1] + query_box[2]),
+            "y": (query_box[0] - query_box[2], query_box[0] + query_box[2]),
             "time": time,
         }
 
@@ -134,7 +136,7 @@ def calculate_anomalies(shp_fpath, resolution, year, season, query_box, dask_chu
             ls7_slc_off=False,
             output_crs="epsg:3577",
             resolution=resolution,
-            resampling= {"fmask": "nearest", "*": "bilinear"},
+            resampling={"fmask": "nearest", "*": "bilinear"},
             dask_chunks=dask_chunks,
             group_by="solar_day",
             **query,
@@ -150,7 +152,6 @@ def calculate_anomalies(shp_fpath, resolution, year, season, query_box, dask_chu
     )
     print("calculating vegetation indice")
     vegIndex = (ds.nbart_nir - ds.nbart_red) / (ds.nbart_nir + ds.nbart_red)
-        
     vegIndex = vegIndex.mean("time").rename("ndvi_mean")
 
     # get the bounding coords of the input ds to help with indexing the climatology
@@ -162,32 +163,28 @@ def calculate_anomalies(shp_fpath, resolution, year, season, query_box, dask_chu
     # index the climatology dataset to the location of our AOI
     climatology_mean = (
         xr.open_rasterio(
-            "data/climatologies/mean/ndvi_clim_mean_"
-            + season
-            + "_gwydir.tif"
+            "data/climatologies/mean/ndvi_clim_mean_" + season + "_gwydir.tif"
         )
         .sel(x=x_slice, y=y_slice, method="nearest")
         .chunk(chunks=dask_chunks)
         .squeeze()
     )
-    
+
     climatology_mean = assign_crs(climatology_mean)
-    climatology_mean = xr_reproject(climatology_mean ,ds.geobox, "bilinear")
-    
+    climatology_mean = xr_reproject(climatology_mean, ds.geobox, "bilinear")
+
     climatology_std = (
         xr.open_rasterio(
-            "data/climatologies/std/ndvi_clim_std_"
-            + season
-            + "_gwydir.tif"
+            "data/climatologies/std/ndvi_clim_std_" + season + "_gwydir.tif"
         )
         .sel(x=x_slice, y=y_slice, method="nearest")
         .chunk(chunks=dask_chunks)
         .squeeze()
     )
-    
+
     climatology_std = assign_crs(climatology_std)
-    climatology_std = xr_reproject(climatology_std ,ds.geobox, "bilinear")
-    
+    climatology_std = xr_reproject(climatology_std, ds.geobox, "bilinear")
+
     # test if the arrays match before we calculate the anomalies
     np.testing.assert_allclose(
         vegIndex.x.values,
@@ -237,3 +234,50 @@ def calculate_anomalies(shp_fpath, resolution, year, season, query_box, dask_chu
     )
 
     return assign_crs(anomalies, crs=ds.geobox.crs)
+
+
+def autoregress_xr(da, test_length, window, lags):
+    # drop na
+    da = da[~np.isnan(da)]
+    # split dataset
+    train, test = da[1 : len(da) - test_length], da[len(da) - test_length :]
+    # train autoregression
+    model = AutoReg(train, lags=lags)
+    model_fit = model.fit()
+    coef = model_fit.params
+
+    # walk forward over time steps in test
+    history = train[len(train) - window :]
+    history = [history[i] for i in range(len(history))]
+
+    predictions = list()
+    for t in range(len(test)):
+        length = len(history)
+        lag = [history[i] for i in range(length - window, length)]
+        yhat = coef[0]
+        for d in range(window):
+            yhat += coef[d + 1] * lag[window - d - 1]
+        obs = test[t]
+        predictions.append(yhat)
+        history.append(obs)
+
+    return np.array(predictions).flatten()
+
+
+def autoregress_predict_xr(da, test_length, window, lags):
+
+    # pass xr_autoregress through ufunc
+    predict = xr.apply_ufunc(
+        autoregress_xr,
+        da,
+        kwargs={"test_length": test_length, "window": window, "lags": window},
+        input_core_dims=[["time"]],
+        output_core_dims=[["predictions"]],
+        output_sizes=({"predictions": test_length}),
+        exclude_dims=set(("time",)),
+        vectorize=True,
+        dask="parallelized",
+        output_dtypes=[da.dtype],
+    ).compute()
+
+    return assign_crs(predict, crs=da.geobox.crs)
