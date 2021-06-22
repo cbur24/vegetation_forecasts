@@ -27,3 +27,6 @@ A repository for testing ecological forecasting methods of satellite derived veg
   * [Applied example](https://www.ethanrosenthal.com/2018/03/22/time-series-for-scikit-learn-people-part2/)
   
 * https://www.machinelearningplus.com/time-series/time-series-analysis-python/
+
+[ml-forecast]
+https://nixtla.github.io/mlforecast/forecast.html
